@@ -1,0 +1,35 @@
+{
+  "name": "Izypower",
+  "version": "0.3.0",
+  "description": "Client pour micro-onduleurs IZYPOWER iP-1000-W2 / iP-2000-W4 : API cloud Izypower (application.izypowercloud.fr) — les iP n'exposent ni Solarman V5 ni INDEVOLT en local — + client INDEVOLT RPC (8080) pour Titan/batteries + client Solarman V5 (TCP 8899) pour onduleurs Deye locaux. ESP8266/ESP32",
+  "keywords": ["izypower", "deye", "solarman", "modbus", "cloud", "izypowercloud", "micro-onduleur", "inverter", "solar", "pv", "esp8266", "esp32"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fo170/izypower.git"
+  },
+  "authors": [
+    {
+      "name": "Olivier FOURNET",
+      "email": "olivier.fournet@free.fr",
+      "maintainer": true
+    }
+  ],
+  "license": "GPL-3.0-only",
+  "homepage": "https://github.com/Fo170/izypower",
+  "frameworks": "arduino",
+  "platforms": [
+    "espressif8266",
+    "espressif32"
+  ],
+  "headers": ["Izypower.h", "IzypowerSolarman.h", "IzypowerCloud.h"],
+  "examples": [
+    {
+      "name": "Basic",
+      "base": "examples/basic",
+      "files": ["basic.ino"]
+    }
+  ],
+  "dependencies": {
+    "bblanchon/ArduinoJson": "^7.0.0"
+  }
+}
