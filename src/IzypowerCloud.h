@@ -26,14 +26,22 @@
 //       searchTime est optionnel (données du jour) mais sans lui
 //       energy vaut null → on extrait la date de data.lastUpdate.
 //
+//   GET  /photo_voltaic/api/device/page?powerId={id}&deviceType=all&page=1&limit=100
+//       → data.records[] : sn, deviceType, device (modèle "VMP2"/"VMP4"/"Meter"),
+//         pvNum (0 = Smart Meter), mac, softwareVersion, deviceId,
+//         onlineState, rssi, dataDtos[] (paires key/value). Best-effort.
+//
 // Ce fichier est header-only (tout est inline), dépend uniquement
 // d'ArduinoJson. Compatible ESP8266/ESP32.
 //
-// Utilisation :
+// Utilisation (accès en lecture uniquement, via getters) :
 //   IzypowerCloud cloud;
 //   cloud.begin("email@ex.fr", "mdp", 0);      // stationId = 0 → auto
 //   int err = cloud.poll();                    // 0 = OK (cf. IZY_ERR_*)
-//   cloud.inverterCount(), cloud.inverter(i), ...
+//   cloud.productionW(), cloud.gridImportW(), cloud.houseConsumptionW(), ...
+//   cloud.inverterCount(), cloud.inverter(i), cloud.find("SN"), ...
+//   cloud.deviceCount(), cloud.device(i), cloud.findDevice("SN"),
+//   cloud.findDevice("SN")->dtoValue("v_ac"), ->rssiDbm(), ->macAddress(), ...
 // ============================================================
 
 #ifndef IZYPOWERCLOUD_H
@@ -59,6 +67,12 @@
 #define IZY_UPDATE_LEN    32     // "YYYY-MM-DD HH:MM:SS"
 #define IZY_DATE_LEN      11     // "YYYY-MM-DD"
 #define IZY_TOKEN_LEN    512
+#define IZY_MAX_DEVICES   8      // appareils device/page max (Smart Meter, batterie, EV…)
+#define IZY_MAX_DTOS      8      // dataDtos max par appareil
+#define IZY_DTO_KEY_LEN  24
+#define IZY_DTO_VAL_LEN  40
+#define IZY_MAC_LEN      24
+#define IZY_SW_LEN       40
 
 // ============================================================
 // CODES DE RETOUR DE poll()
@@ -76,33 +90,99 @@ enum {
 // ============================================================
 // STRUCTURES DE DONNÉES
 // ============================================================
+// Chaîne PV d'un onduleur.
 struct IzypowerCloudPv {
-    bool   exists;      // chaîne présente physiquement (exists)
-    float  powerW;      // puissance DC de la chaîne (W)
-    float  energyKWh;   // énergie du jour de la chaîne (kWh)
+    bool   connected() const  { return _connected; }   // chaîne présente physiquement
+    float  powerW() const     { return _powerW; }      // puissance DC (W)
+    float  energyKwh() const  { return _energyKwh; }   // énergie du jour (kWh)
+private:
+    bool   _connected = false;
+    float  _powerW = 0;
+    float  _energyKwh = 0;
+    friend class IzypowerCloud;
 };
 
+// Onduleur (chaînes PV issues de component/).
 struct IzypowerCloudInverter {
-    char   sn[IZY_SN_LEN];   // numéro de série (deviceName == sn)
-    uint32_t deviceId;       // identifiant interne cloud
-    uint16_t ratedW;         // puissance nominale totale (W)
-    uint8_t  pvCount;        // nombre de chaînes retournées
-    IzypowerCloudPv pv[IZY_MAX_PV];
+    const char* serialNumber() const  { return _serialNumber; }
+    uint32_t    deviceId() const      { return _deviceId; }
+    uint16_t    ratedPowerW() const   { return _ratedPowerW; }
+    uint8_t     pvCount() const       { return _pvCount; }
+    float       productionW() const;        // somme des puissances PV (W)
+    float       productionKwhToday() const; // somme des énergies du jour (kWh)
 
-    float powerW() const;    // somme des puissances PV (W)
-    float todayKWh() const;  // somme des énergies du jour (kWh)
+    const IzypowerCloudPv* pv(uint8_t i) const { return (i < _pvCount) ? &_pv[i] : nullptr; }
+    bool  pvConnected(uint8_t i) const { return pv(i) ? pv(i)->connected() : false; }
+    float pvPowerW(uint8_t i) const    { return pv(i) ? pv(i)->powerW() : 0; }
+    float pvEnergyKwh(uint8_t i) const { return pv(i) ? pv(i)->energyKwh() : 0; }
+private:
+    char     _serialNumber[IZY_SN_LEN];
+    uint32_t _deviceId;
+    uint16_t _ratedPowerW;
+    uint8_t  _pvCount;
+    IzypowerCloudPv _pv[IZY_MAX_PV];
+    friend class IzypowerCloud;
 };
 
-inline float IzypowerCloudInverter::powerW() const {
-    float s = 0;
-    for (uint8_t i = 0; i < pvCount && i < IZY_MAX_PV; i++) s += pv[i].powerW;
-    return s;
+inline float IzypowerCloudInverter::productionW() const {
+    float sum = 0;
+    for (uint8_t i = 0; i < _pvCount && i < IZY_MAX_PV; i++) sum += _pv[i].powerW();
+    return sum;
 }
-inline float IzypowerCloudInverter::todayKWh() const {
-    float s = 0;
-    for (uint8_t i = 0; i < pvCount && i < IZY_MAX_PV; i++) s += pv[i].energyKWh;
-    return s;
+inline float IzypowerCloudInverter::productionKwhToday() const {
+    float sum = 0;
+    for (uint8_t i = 0; i < _pvCount && i < IZY_MAX_PV; i++) sum += _pv[i].energyKwh();
+    return sum;
 }
+
+// dataDto (device/page) : paire clé → valeur.
+struct IzypowerCloudDto {
+    const char* key() const   { return _key; }
+    const char* value() const { return _value; }
+private:
+    char _key[IZY_DTO_KEY_LEN] = {0};
+    char _value[IZY_DTO_VAL_LEN] = {0};
+    friend class IzypowerCloud;
+};
+
+// Appareil non-PV (device/page) : Smart Meter / Passerelle IA, batterie, EV…
+struct IzypowerCloudDevice {
+    const char* serialNumber() const { return _serialNumber; }
+    const char* type() const         { return _type; }
+    // Modèle matériel du cloud (device/page) : "VMP2", "VMP4", "Meter"…
+    const char* model() const        { return _model; }
+    // Nombre de chaînes PV exposé par le cloud (0 pour Meter, 2/4 pour VMP2/VMP4).
+    uint8_t     pvNum() const        { return _pvNum; }
+    const char* macAddress() const   { return _macAddress; }
+    const char* firmware() const     { return _firmware; }
+    uint32_t    deviceId() const     { return _deviceId; }
+    bool        online() const       { return _online; }
+    int16_t     rssiDbm() const      { return _rssiDbm; }
+    uint8_t     dtoCount() const     { return _dtoCount; }
+    const IzypowerCloudDto* dto(uint8_t i) const {
+        return (i < _dtoCount) ? &_dto[i] : nullptr;
+    }
+    // Valeur d'une dataDto ("" si absente). Ex. "v_ac" → "237.2V".
+    const char* dtoValue(const char* key) const {
+        if (!key) return "";
+        for (uint8_t i = 0; i < _dtoCount; i++)
+            if (strcmp(_dto[i].key(), key) == 0) return _dto[i].value();
+        return "";
+    }
+private:
+    char     _serialNumber[IZY_SN_LEN] = {0};
+    char     _type[16] = {0};
+    char     _model[16] = {0};
+    uint8_t  _pvNum = 0;
+    char     _macAddress[IZY_MAC_LEN] = {0};
+    char     _firmware[IZY_SW_LEN] = {0};
+    uint32_t _deviceId = 0;
+    bool     _online = false;
+    int16_t  _rssiDbm = 0;
+    uint8_t  _dtoCount = 0;
+    IzypowerCloudDto _dto[IZY_MAX_DTOS];
+    friend class IzypowerCloud;
+};
 
 // ============================================================
 // CLIENT CLOUD
@@ -113,12 +193,14 @@ public:
         : _hasToken(false), _loginAtMs(0), _cfgStationId(0),
           _httpTimeoutMs(10000),
           _valid(false), _stationId(0), _installedCapacity(0),
-          _powerW(0), _todayKWh(0), _monthKWh(0), _yearKWh(0), _totalKWh(0),
-          _signal(0), _stationOnline(false), _count(0),
+          _productionW(0), _todayKwh(0), _monthKwh(0), _yearKwh(0), _totalKwh(0),
+          _signalDbm(0), _stationOnline(false), _count(0),
+          _deviceCount(0), _gridImportW(0), _houseConsumptionW(0), _evChargeW(0),
           _updatedMs(0), _lastError(IZY_OK) {
         _email[0] = _password[0] = _token[0] = 0;
         _stationName[0] = _lastUpdate[0] = _searchDate[0] = 0;
         memset(_inverters, 0, sizeof _inverters);
+        memset(_devices, 0, sizeof _devices);
     }
 
     // stationId = 0 → auto-découverte de la première station du compte.
@@ -148,34 +230,51 @@ public:
         if (rInfo != IZY_OK) return rInfo;
         if (rComp != IZY_OK) return rComp;
 
+        fetchDevices();   // métrologie (Smart Meter) — best-effort, non fatal
+
         _valid = true;
         _updatedMs = millis();
         return IZY_OK;
     }
 
     // ---- Station -------------------------------------------------
-    bool        valid() const         { return _valid; }
-    uint32_t    stationId() const     { return _stationId; }
-    const char* stationName() const   { return _stationName; }
-    uint16_t    installedCapacityW() const { return _installedCapacity; }
-    float       powerW() const        { return _powerW; }        // W, production PV station
-    float       todayKWh() const      { return _todayKWh; }
-    float       monthKWh() const      { return _monthKWh; }
-    float       yearKWh() const       { return _yearKWh; }
-    float       totalKWh() const      { return _totalKWh; }
-    const char* lastUpdate() const    { return _lastUpdate; }    // "YYYY-MM-DD HH:MM:SS"
-    int16_t     signal() const        { return _signal; }        // RSSI (dBm), meilleur device
-    bool        stationOnline() const { return _stationOnline; }
+    bool        valid() const             { return _valid; }
+    uint32_t    stationId() const         { return _stationId; }
+    const char* stationName() const       { return _stationName; }
+    uint16_t    installedCapacityW() const{ return _installedCapacity; }
+    float       productionW() const       { return _productionW; }        // W, production PV station
+    float       productionKwhToday() const{ return _todayKwh; }
+    float       productionKwhMonth() const{ return _monthKwh; }
+    float       productionKwhYear() const { return _yearKwh; }
+    float       productionKwhTotal() const{ return _totalKwh; }
+    const char* lastUpdate() const        { return _lastUpdate; }         // "YYYY-MM-DD HH:MM:SS"
+    int16_t     signalDbm() const         { return _signalDbm; }          // RSSI (dBm), meilleur device
+    bool        stationOnline() const     { return _stationOnline; }
+    int16_t     gridImportW() const       { return _gridImportW; }        // W : import (+) / injection (-) réseau
+    int16_t     houseConsumptionW() const { return _houseConsumptionW; }  // W : consommation du foyer (Smart Meter)
+    int16_t     evChargeW() const         { return _evChargeW; }          // W : puissance de la borne EV
 
     // ---- Onduleurs (ordre de découverte du cloud) ---------------
     uint8_t  inverterCount() const { return _count; }
     const IzypowerCloudInverter* inverter(uint8_t i) const {
         return (i < _count) ? &_inverters[i] : nullptr;
     }
-    const IzypowerCloudInverter* find(const char* sn) const {
-        if (!sn) return nullptr;
+    const IzypowerCloudInverter* find(const char* serialNumber) const {
+        if (!serialNumber) return nullptr;
         for (uint8_t i = 0; i < _count; i++)
-            if (strcmp(_inverters[i].sn, sn) == 0) return &_inverters[i];
+            if (strcmp(_inverters[i].serialNumber(), serialNumber) == 0) return &_inverters[i];
+        return nullptr;
+    }
+
+    // ---- Appareils (device/page) : Smart Meter / Passerelle IA, batterie, EV… ----
+    uint8_t  deviceCount() const { return _deviceCount; }
+    const IzypowerCloudDevice* device(uint8_t i) const {
+        return (i < _deviceCount) ? &_devices[i] : nullptr;
+    }
+    const IzypowerCloudDevice* findDevice(const char* serialNumber) const {
+        if (!serialNumber) return nullptr;
+        for (uint8_t i = 0; i < _deviceCount; i++)
+            if (strcmp(_devices[i].serialNumber(), serialNumber) == 0) return &_devices[i];
         return nullptr;
     }
 
@@ -210,13 +309,16 @@ private:
     uint32_t _stationId;
     char     _stationName[IZY_NAME_LEN];
     uint16_t _installedCapacity;
-    float    _powerW, _todayKWh, _monthKWh, _yearKWh, _totalKWh;
+    float    _productionW, _todayKwh, _monthKwh, _yearKwh, _totalKwh;
     char     _lastUpdate[IZY_UPDATE_LEN];
     char     _searchDate[IZY_DATE_LEN];   // date extraite de lastUpdate
-    int16_t  _signal;
+    int16_t  _signalDbm;
     bool     _stationOnline;
     uint8_t  _count;
     IzypowerCloudInverter _inverters[IZY_MAX_INVERTERS];
+    uint8_t  _deviceCount;
+    IzypowerCloudDevice _devices[IZY_MAX_DEVICES];
+    int16_t  _gridImportW, _houseConsumptionW, _evChargeW;
     uint32_t _updatedMs;
     int      _lastError;
 
@@ -308,13 +410,17 @@ private:
         if (r != IZY_OK) return r;
 
         JsonVariantConst data = doc["data"];
-        _powerW          = (float)(doc["power"] | data["power"] | 0.0f);
-        _todayKWh        = data["todaySum"]  | 0.0f;
-        _monthKWh        = data["monthSum"]  | 0.0f;
-        _yearKWh         = data["yearSum"]   | 0.0f;
-        _totalKWh        = data["allSum"]    | 0.0f;
-        _signal          = data["signal"]    | 0;
-        _stationOnline   = ((data["onlineState"] | 0) == 1);
+        _productionW      = (float)(doc["power"] | data["power"] | 0.0f);
+        _todayKwh         = data["todaySum"]  | 0.0f;
+        _monthKwh         = data["monthSum"]  | 0.0f;
+        _yearKwh          = data["yearSum"]   | 0.0f;
+        _totalKwh         = data["allSum"]    | 0.0f;
+        _signalDbm        = data["signal"]    | 0;
+        _stationOnline    = ((data["onlineState"] | 0) == 1);
+        // Métrologie du Smart Meter, en top-level de la réponse v3/info.
+        _gridImportW      = doc["grid_power"]  | 0;
+        _houseConsumptionW = doc["consumption"] | 0;
+        _evChargeW        = doc["ev_power"]    | 0;
 
         const char* name  = data["stationName"] | "";
         const char* upd   = data["lastUpdate"] | "";
@@ -351,45 +457,100 @@ private:
             const char* sn = p["sn"] | "";
             if (!sn[0]) continue;
 
-            IzypowerCloudInverter* inv = _findOrAdd(sn);
-            if (!inv) break;   // tableau plein
+            IzypowerCloudInverter* inverter = _findOrAdd(sn);
+            if (!inverter) break;   // tableau plein
 
             // NB : dans la réponse réelle, deviceId est une STRING
             // ("12345") et totalRatePower un FLOAT (2000.0) → conversions
             // explicites (ArduinoJson v7 ne fait pas string→int ni float→int).
-            if (inv->deviceId == 0) {
+            if (inverter->_deviceId == 0) {
                 const char* did = p["deviceId"] | "";
-                if (did[0]) inv->deviceId = (uint32_t)strtoul(did, nullptr, 10);
+                if (did[0]) inverter->_deviceId = (uint32_t)strtoul(did, nullptr, 10);
             }
-            if (inv->ratedW == 0) {
+            if (inverter->_ratedPowerW == 0) {
                 float trp = p["totalRatePower"] | 0.0f;
-                if (trp > 0) inv->ratedW = (uint16_t)trp;
+                if (trp > 0) inverter->_ratedPowerW = (uint16_t)trp;
             }
 
             int idx = pvIndex(p["pv"] | "");
             if (idx < 0 || idx >= IZY_MAX_PV) continue;
-            if (idx + 1 > inv->pvCount) inv->pvCount = idx + 1;
+            if (idx + 1 > inverter->_pvCount) inverter->_pvCount = idx + 1;
 
-            IzypowerCloudPv& pv = inv->pv[idx];
-            pv.exists   = (bool)(p["exists"] | true);
-            pv.powerW   = p["pvPower"] | 0.0f;
-            pv.energyKWh = p["energy"] | 0.0f;
+            IzypowerCloudPv& chain = inverter->_pv[idx];
+            chain._connected = (bool)(p["exists"] | true);
+            chain._powerW    = p["pvPower"] | 0.0f;
+            chain._energyKwh = p["energy"] | 0.0f;
         }
         return IZY_OK;
     }
 
-    IzypowerCloudInverter* _findOrAdd(const char* sn) {
+    // Métrologie : device/page (Smart Meter / Passerelle IA, batterie, EV…).
+    // Best-effort : une erreur ici ne bloque pas la lecture PV (non fatal).
+    int fetchDevices() {
+        _deviceCount = 0;
+        String url = String(BASE_URL) + "/device/page?powerId=" + String(_stationId)
+                     + "&deviceType=all&page=1&limit=100";
+        JsonDocument doc;
+        int r = httpJsonGet(url.c_str(), doc);
+        if (r != IZY_OK) return r;
+
+        JsonArray recs = doc["data"]["records"].as<JsonArray>();
+        if (recs.isNull()) return IZY_OK;
+
+        for (JsonVariantConst rec : recs) {
+            if (_deviceCount >= IZY_MAX_DEVICES) break;
+            IzypowerCloudDevice& device = _devices[_deviceCount++];
+            memset(&device, 0, sizeof device);
+
+            const char* sn = rec["sn"] | "";
+            if (!sn[0]) sn = rec["deviceName"] | "";
+            strncpy(device._serialNumber, sn, sizeof device._serialNumber - 1);
+            strncpy(device._type, rec["deviceType"] | "", sizeof device._type - 1);
+            strncpy(device._model, rec["device"] | "", sizeof device._model - 1);
+            device._pvNum     = rec["pvNum"] | 0;
+            strncpy(device._macAddress, rec["mac"] | "", sizeof device._macAddress - 1);
+            strncpy(device._firmware, rec["softwareVersion"] | "", sizeof device._firmware - 1);
+            device._deviceId = rec["deviceId"] | 0UL;
+            device._online   = ((rec["onlineState"] | 0) == 1);
+            device._rssiDbm  = rec["rssi"] | 0;
+
+            // dataDtos : paires clé → valeur, valeur souvent une chaîne avec
+            // unité ("237.2V") mais parfois nombre ou tableau (alarm: []).
+            JsonArrayConst dtos = rec["dataDtos"].as<JsonArrayConst>();
+            for (JsonVariantConst d : dtos) {
+                if (device._dtoCount >= IZY_MAX_DTOS) break;
+                const char* key = d["key"] | "";
+                if (!key[0]) continue;
+                IzypowerCloudDto& out = device._dto[device._dtoCount];
+                strncpy(out._key, key, sizeof out._key - 1);
+
+                JsonVariantConst val = d["value"];
+                const char* sv = val | "";
+                if (sv[0]) {
+                    strncpy(out._value, sv, sizeof out._value - 1);
+                } else if (!val.isNull()) {
+                    String v;
+                    serializeJson(val, v);
+                    strncpy(out._value, v.c_str(), sizeof out._value - 1);
+                }
+                device._dtoCount++;
+            }
+        }
+        return IZY_OK;
+    }
+
+    IzypowerCloudInverter* _findOrAdd(const char* serialNumber) {
         for (uint8_t i = 0; i < _count; i++)
-            if (strcmp(_inverters[i].sn, sn) == 0) return &_inverters[i];
+            if (strcmp(_inverters[i]._serialNumber, serialNumber) == 0) return &_inverters[i];
         if (_count >= IZY_MAX_INVERTERS) return nullptr;
-        IzypowerCloudInverter& inv = _inverters[_count++];
-        inv.sn[0] = 0;
-        strncpy(inv.sn, sn, sizeof inv.sn - 1);
-        inv.deviceId = 0;
-        inv.ratedW   = 0;
-        inv.pvCount  = 0;
-        memset(inv.pv, 0, sizeof inv.pv);
-        return &inv;
+        IzypowerCloudInverter& inverter = _inverters[_count++];
+        inverter._serialNumber[0] = 0;
+        strncpy(inverter._serialNumber, serialNumber, sizeof inverter._serialNumber - 1);
+        inverter._deviceId    = 0;
+        inverter._ratedPowerW = 0;
+        inverter._pvCount     = 0;
+        memset(inverter._pv, 0, sizeof inverter._pv);
+        return &inverter;
     }
 
     // "pv1" → 0, "pv2" → 1… ; -1 si non reconnu.

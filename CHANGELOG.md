@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.0] — 2026-08-07
+
+- **Support du Smart Meter iP-SmartIA-W3** dans `src/IzypowerCloud.h` : nouvel endpoint `fetchDevices()` (`GET /device/page`, best-effort/non fatal dans `poll()`) avec les structures `IzypowerCloudDevice` (`serialNumber/type/model/pvNum/macAddress/firmware/deviceId/online/rssiDbm`) et `IzypowerCloudDto` (`key/value`, `dtoValue(key)`). Le Smart Meter (`model: "Meter"`, `pvNum: 0`) n'apparaît que dans `device/page`, pas dans `component/`.
+- **Métrologie station** : `v3/powerStations/info` parse les champs top-level `grid_power`, `consumption`, `ev_power` → nouveaux getters `gridImportW()` (import + / injection −), `houseConsumptionW()`, `evChargeW()`.
+- **Refactorisation « getters »** : accès **100 % par getters** (champs privés `_*` remplis via `friend class IzypowerCloud`), plus aucun champ public. Renommages : `powerW→productionW`, `todayKWh/monthKWh/yearKWh/totalKWh→productionKwhToday/Month/Year/Total`, `signal→signalDbm`, `sn→serialNumber()`, `ratedW→ratedPowerW()`, `pv[i].exists/powerW/energyKWh→pv(i)->connected()/powerW()/energyKwh()`.
+- `examples/basic/basic.ino` mis à jour : nouvelle API getters + affichage Smart Meter (réseau/foyer/EV) et appareils `device/page`.
+- README : API getters, métrologie Smart Meter, endpoint `device/page` détaillé.
+- `library.json` / `library.properties` : version 0.4.0.
+
 ## [0.3.0] — 2026-08-06
 
 - **Diagnostic matériel définitif** : les iP n'exposent **ni INDEVOLT RPC (8080) ni SOLARMAN V5 (8899)** en local (aucun port TCP ouvert, aucune réponse UDP) → voie principale = **API cloud Izypower** (`application.izypowercloud.fr`, rafraîchi ~3 min).

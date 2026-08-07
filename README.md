@@ -44,7 +44,8 @@ Ce qui a été **réellement testé** sur mes micro-onduleurs iP (un iP-1000-W2 
 | **Types de champs cloud** | `deviceId` = **string** (`"12345"`), `totalRatePower` = **float** (`2000.0`), `dayEnergy` dans `dataDtos` = **string avec unité** (`"4.64KWh"`). |
 | **`searchTime` requis pour `energy`** | Sans lui `energy` vaut `null` → la librairie extrait la date de `data.lastUpdate`. |
 | **Rafraîchissement cloud** | Données réactualisées **~3 min** (`lastUpdate` au format `"YYYY-MM-DD HH:MM:SS"`). |
-| **Device page + wifi** | `GET /device/page` → onduleurs (`onlineState`, `rssi`, `pvNum`, `dataDtos`) ; `GET /v3/device/wifi/{sn}` → rssi/ip/wifi. |
+| **Device page + wifi** | `GET /device/page` → onduleurs **et Smart Meter** (`sn`, `deviceType`, `device` modèle `"VMP2"`/`"VMP4"`/`"Meter"`, `pvNum` 0 pour le Meter, `mac`, `softwareVersion`, `onlineState`, `rssi`, `dataDtos`) ; `GET /v3/device/wifi/{sn}` → rssi/ip/wifi. |
+| **Métrologie Smart Meter** | `v3/powerStations/info` en top-level → `grid_power` (import + / injection −), `consumption`, `ev_power`. Sur matériel : `v_ac=236.3V`, `freq=49.97Hz`, import/export cumulés, rssi −48 dBm via `device/page` (iP-SmartIA-W3). |
 
 ### 🟡 Validé hors matériel (simulation / compilation)
 
@@ -53,7 +54,7 @@ Ce qui a été **réellement testé** sur mes micro-onduleurs iP (un iP-1000-W2 
 
 ### ⏳ Reste à valider
 
-- **`IzypowerCloud.h` sur un ESP réel** : l'exemple `basic.ino` doit afficher les puissances sur la console série (la compilation passe, mais je n'ai pas encore branché le client sur une carte).
+- **`IzypowerCloud.h` sur un ESP réel** : le client a été validé sur matériel via un firmware passerelle (ESP8266 : `/json` → 3 appareils auto-listés, Smart Meter iP-SmartIA-W3 236.3 V / 49.97 Hz, onduleurs `ip-2000-w4`/`ip-1000-w2`). L'exemple `basic.ino` lui-même compile mais n'a pas été flashé tel quel.
 - **`IzypowerSolarman.h` sur un onduleur Deye local** : nécessite un appareil avec le port 8899 réellement ouvert (logger *Built-in datalogger* accessible). Impossible à tester sur mes iP.
 - **`Izypower.h` sur un Titan battery** : nécessite un appareil Titan exposant le port 8080. Non testé sur mes iP (8080 fermé).
 
@@ -62,7 +63,7 @@ Ce qui a été **réellement testé** sur mes micro-onduleurs iP (un iP-1000-W2 
 ## Caractéristiques
 
 - **Header-only**, sans `.cpp`, compatible **ESP8266** et **ESP32** :
-  - `src/IzypowerCloud.h` — client **API cloud Izypower** : login, auto-découverte de la centrale, station (puissance W + énergies jour/mois/an/total + signal + dernier rafraîchissement), onduleurs et **chaînes PV individuelles** (PV1..PV4 en W + kWh du jour). Dépend d'ArduinoJson.
+  - `src/IzypowerCloud.h` — client **API cloud Izypower** : login, auto-découverte de la centrale, station (puissance W + énergies jour/mois/an/total + signal + dernier rafraîchissement), onduleurs et **chaînes PV individuelles** (PV1..PV4 en W + kWh du jour), + **métrologie Smart Meter iP-SmartIA-W3** (import/injection réseau, conso foyer, borne EV, tension/fréquence via `device/page`). Dépend d'ArduinoJson. **Accès 100 % par getters.**
   - `src/IzypowerSolarman.h` — client **Solarman V5** (TCP 8899) + décodeur `DeyeMicro` (registres Deye micro-onduleur, protocole officiel V118). Pas de dépendance externe.
   - `src/Izypower.h` — client **INDEVOLT RPC** (port 8080) : Titan battery / batteries uniquement.
 
@@ -78,7 +79,7 @@ lib_deps =
 
 ## Utilisation — API cloud (`IzypowerCloud.h`)
 
-Voie principale des iP (aucun accès local). Client HTTP de `application.izypowercloud.fr` :
+Voie principale des iP (aucun accès local). Client HTTP de `application.izypowercloud.fr`, **accès 100 % par getters** (champs privés) :
 
 ```cpp
 #include <IzypowerCloud.h>
@@ -87,21 +88,32 @@ IzypowerCloud cloud;
 cloud.begin("email@compte.fr", "mot_de_passe", 0);   // stationId = 0 → auto-découverte
 if (cloud.poll() == IZY_OK) {
     Serial.printf("Station %s : P=%d W, aujourd'hui %.2f kWh\n",
-                  cloud.stationName(), (int)cloud.powerW(), cloud.todayKWh());
+                  cloud.stationName(), (int)cloud.productionW(), cloud.productionKwhToday());
+    // Métrologie Smart Meter (top-level de v3/powerStations/info).
+    Serial.printf("Réseau : import %d W (négatif = injection) | foyer %d W | EV %d W\n",
+                  (int)cloud.gridImportW(), (int)cloud.houseConsumptionW(), (int)cloud.evChargeW());
     for (uint8_t i = 0; i < cloud.inverterCount(); i++) {
         const IzypowerCloudInverter* inv = cloud.inverter(i);
         Serial.printf("  %s : P=%d W, jour %.2f kWh, %u chaînes\n",
-                      inv->sn, (int)inv->powerW(), inv->todayKWh(), inv->pvCount);
-        for (uint8_t p = 0; p < inv->pvCount; p++)
+                      inv->serialNumber(), (int)inv->productionW(),
+                      inv->productionKwhToday(), inv->pvCount());
+        for (uint8_t p = 0; p < inv->pvCount(); p++)
             Serial.printf("    PV%u : %.1f W / %.2f kWh\n", p + 1,
-                          inv->pv[p].powerW, inv->pv[p].energyKWh);
+                          inv->pvPowerW(p), inv->pvEnergyKwh(p));
+    }
+    // Appareils non-PV (device/page) : Smart Meter iP-SmartIA-W3, batterie, EV…
+    for (uint8_t i = 0; i < cloud.deviceCount(); i++) {
+        const IzypowerCloudDevice* dev = cloud.device(i);
+        Serial.printf("  %s (modèle %s, %u chaîne(s) PV) : RSSI %d dBm\n",
+                      dev->serialNumber(), dev->model(), dev->pvNum(), (int)dev->rssiDbm());
     }
 }
 ```
 
-- `poll()` retourne `IZY_OK` ou une erreur `IZY_ERR_*` (`cloud.lastErrorText()` donne le détail). Le token JWT est géré automatiquement (re-login sur 401/403 ou après 22 h) ; la date du jour (`searchTime`) est dérivée de `data.lastUpdate` pour que `energy` ne soit pas `null`.
-- Accesseurs **station** : `stationId()`, `stationName()`, `installedCapacityW()`, `powerW()` (W), `todayKWh()` / `monthKWh()` / `yearKWh()` / `totalKWh()` (kWh), `lastUpdate()`, `signal()` (dBm), `stationOnline()`, `valid()`, `updatedMs()`.
-- **Onduleurs** : `inverterCount()`, `inverter(i)`, `find("SN")` → `IzypowerCloudInverter` : `sn`, `deviceId`, `ratedW`, `pvCount`, `pv[i]` (`exists`, `powerW`, `energyKWh`), et les calculs `powerW()` / `todayKWh()`.
+- `poll()` retourne `IZY_OK` ou une erreur `IZY_ERR_*` (`cloud.lastErrorText()` donne le détail). Le token JWT est géré automatiquement (re-login sur 401/403 ou après 22 h) ; la date du jour (`searchTime`) est dérivée de `data.lastUpdate` pour que `energy` ne soit pas `null`. `poll()` appelle aussi `device/page` (**best-effort** : une erreur sur cet appel n'empêche pas la lecture PV).
+- Accesseurs **station** : `stationId()`, `stationName()`, `installedCapacityW()`, `productionW()` (W), `productionKwhToday()` / `productionKwhMonth()` / `productionKwhYear()` / `productionKwhTotal()` (kWh), `gridImportW()` (import + / injection −), `houseConsumptionW()`, `evChargeW()`, `lastUpdate()`, `signalDbm()` (dBm), `stationOnline()`, `valid()`, `updatedMs()`.
+- **Onduleurs** : `inverterCount()`, `inverter(i)`, `find("SN")` → `IzypowerCloudInverter` : `serialNumber()`, `deviceId()`, `ratedPowerW()`, `pvCount()`, `pv(i)` (`connected()`, `powerW()`, `energyKwh()`), et les calculs `productionW()` / `productionKwhToday()`.
+- **Appareils (device/page)** : `deviceCount()`, `device(i)`, `findDevice("SN")` → `IzypowerCloudDevice` : `serialNumber()`, `type()`, `model()` (`"VMP2"`/`"VMP4"`/`"Meter"`), `pvNum()` (**0 pour le Smart Meter**), `macAddress()`, `firmware()`, `deviceId()`, `online()`, `rssiDbm()`, `dtoCount()`, `dto(i)`, `dtoValue(key)` (ex. `"v_ac"` → `"237.2V"`, `""` si absent).
 - Dépendance : ArduinoJson v7.
 
 **Codes de retour de `poll()`** :
@@ -123,7 +135,7 @@ void loop() {
     static uint32_t last = 0;
     if (millis() - last > 60000) {          // 60 s, le cloud est en ~3 min
         last = millis();
-        if (cloud.poll() == IZY_OK) { /* afficher cloud.powerW() … */ }
+        if (cloud.poll() == IZY_OK) { /* afficher cloud.productionW() … */ }
     }
 }
 ```
@@ -242,10 +254,10 @@ Base : `http://application.izypowercloud.fr/photo_voltaic/api` — headers `app-
 |---|---|
 | `POST /login` | `data.token` (JWT) |
 | `GET /powerStations/page?page=1&limit=100` | `data.records[].stationsId` (auto-découverte) |
-| `GET /v3/powerStations/info/{id}` | `power` (W), `data.{todaySum,monthSum,yearSum,allSum}` (kWh), `data.{stationName,installedCapacity,lastUpdate,signal,onlineState}` |
+| `GET /v3/powerStations/info/{id}` | `power` (W), `data.{todaySum,monthSum,yearSum,allSum}` (kWh), `data.{stationName,installedCapacity,lastUpdate,signal,onlineState}` + métrologie Smart Meter en top-level : `grid_power`, `consumption`, `ev_power` |
 | `GET /component/{id}?searchTime=YYYY-MM-DD` | `pvData[]` : `sn`, `pv` (pv1..pv4), `pvPower` (W), `energy` (kWh/jour), `totalRatePower` (W), `deviceId` |
 | `GET /v3/device/wifi/{sn}` | `rssi`, `wifi`, `ip` |
-| `GET /device/page?powerId={id}&deviceType=all` | onduleurs : `onlineState`, `rssi`, `pvNum`, `dataDtos` |
+| `GET /device/page?powerId={id}&deviceType=all&page=1&limit=100` | `data.records[]` : `sn`, `deviceType`, `device` (modèle `"VMP2"`/`"VMP4"`/`"Meter"`), `pvNum` (0 = Smart Meter), `mac`, `softwareVersion`, `deviceId`, `onlineState`, `rssi`, `dataDtos[]` (paires `key`/`value`) |
 
 `searchTime` est optionnel (données du jour) mais sans lui `energy` vaut `null` : `IzypowerCloud` extrait donc la date de `data.lastUpdate` de la station.
 

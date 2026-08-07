@@ -2,9 +2,9 @@
  * Izypower - Example Basic
  * https://github.com/Fo170/izypower
  *
- * Récupère via l'API cloud Izypower la production des micro-onduleurs
- * iP-1000-W2 / iP-2000-W4 (station + chaînes PV) et l'affiche sur la
- * console série.
+ * Récupère via l'API cloud Izypower les données des micro-onduleurs
+ * iP-1000-W2 / iP-2000-W4 (station + chaînes PV + métrologie Smart
+ * Meter iP-SmartIA-W3) et les affiche sur la console série.
  *
  * NB : ces iP n'exposent aucun accès local (ni Solarman V5/8899 ni
  * INDEVOLT RPC/8080, vérifié sur matériel) : la lecture passe
@@ -51,16 +51,33 @@ void setup() {
 
     Serial.printf("Station %lu (%s) : %d W, aujourd'hui %.2f kWh\n",
                   (unsigned long)cloud.stationId(), cloud.stationName(),
-                  (int)cloud.powerW(), cloud.todayKWh());
+                  (int)cloud.productionW(), cloud.productionKwhToday());
+    // Métrologie du Smart Meter (top-level de v3/powerStations/info).
+    Serial.printf("  Réseau : import %d W (négatif = injection) | foyer %d W | EV %d W\n",
+                  (int)cloud.gridImportW(), (int)cloud.houseConsumptionW(),
+                  (int)cloud.evChargeW());
 
     for (uint8_t i = 0; i < cloud.inverterCount(); i++) {
         const IzypowerCloudInverter* inv = cloud.inverter(i);
         Serial.printf("  %s (deviceId %lu, %u W) : %d W, jour %.2f kWh, %u chaîne(s)\n",
-                      inv->sn, (unsigned long)inv->deviceId, inv->ratedW,
-                      (int)inv->powerW(), inv->todayKWh(), inv->pvCount);
-        for (uint8_t p = 0; p < inv->pvCount; p++)
+                      inv->serialNumber(), (unsigned long)inv->deviceId(),
+                      inv->ratedPowerW(), (int)inv->productionW(),
+                      inv->productionKwhToday(), inv->pvCount());
+        for (uint8_t p = 0; p < inv->pvCount(); p++)
             Serial.printf("    PV%u : %.1f W / %.2f kWh\n", p + 1,
-                          inv->pv[p].powerW, inv->pv[p].energyKWh);
+                          inv->pvPowerW(p), inv->pvEnergyKwh(p));
+    }
+
+    // Appareils non-PV (device/page) : Smart Meter / Passerelle IA, batterie, EV…
+    for (uint8_t i = 0; i < cloud.deviceCount(); i++) {
+        const IzypowerCloudDevice* dev = cloud.device(i);
+        Serial.printf("  %s (%s, modèle %s, %u chaîne(s) PV) : %s, RSSI %d dBm\n",
+                      dev->serialNumber(), dev->type(), dev->model(), dev->pvNum(),
+                      dev->online() ? "en ligne" : "hors ligne", (int)dev->rssiDbm());
+        for (uint8_t d = 0; d < dev->dtoCount(); d++) {
+            const IzypowerCloudDto* dto = dev->dto(d);
+            Serial.printf("      %s = %s\n", dto->key(), dto->value());
+        }
     }
 }
 
