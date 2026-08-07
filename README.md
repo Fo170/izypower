@@ -1,14 +1,14 @@
 # Izypower
 
-Monitoring des **micro-onduleurs IZYPOWER** (Materfrance) : **iP-1000-W2** (1000 W, 2 MPPT) et **iP-2000-W4** (2000 W, 4 MPPT).
+Monitoring des **appareils IZYPOWER** (Materfrance) : **micro-onduleurs iP-1000-W2** (1000 W, 2 MPPT) / **iP-2000-W4** (2000 W, 4 MPPT) et **Smart Meter iP-SmartIA-W3** (import/injection réseau, conso foyer, borne EV).
 
-⚠️ **Accès aux données (vérifié sur matériel avec `tools/test_local.py`)** : ces micro-onduleurs sont des **Deye** (module WiFi WE-P2) mais **n'exposent NI l'API INDEVOLT RPC (8080) NI SOLARMAN V5 (8899)** en local : aucun port TCP ouvert, aucune réponse UDP Solarman. Ils sont **100 % orientés cloud**. La lecture passe donc par l'**API cloud Izypower** (`application.izypowercloud.fr`) : login → token `x-tts-access-token`, données rafraîchies **toutes les ~3 min** (pas de temps réel).
+⚠️ **Accès aux données (vérifié sur matériel avec `tools/test_local.py`)** : ces appareils (micro-onduleurs iP et Smart Meter iP-SmartIA-W3) sont des **Deye** (module WiFi WE-P2) mais **n'exposent NI l'API INDEVOLT RPC (8080) NI SOLARMAN V5 (8899)** en local : aucun port TCP ouvert, aucune réponse UDP Solarman. Ils sont **100 % orientés cloud**. La lecture passe donc par l'**API cloud Izypower** (`application.izypowercloud.fr`) : login → token `x-tts-access-token`, données rafraîchies **toutes les ~3 min** (pas de temps réel).
 
 Trois clients header-only sont fournis, selon le matériel :
 
 | Client | Matériel | Protocole |
 |---|---|---|
-| `IzypowerCloud.h` | iP-1000-W2 / iP-2000-W4 (**voie principale**) | API cloud `application.izypowercloud.fr` |
+| `IzypowerCloud.h` | iP-1000-W2 / iP-2000-W4 / **iP-SmartIA-W3** (**voie principale**) | API cloud `application.izypowercloud.fr` |
 | `IzypowerSolarman.h` | onduleurs Deye exposant un logger local | Solarman V5, TCP 8899, Modbus RTU |
 | `Izypower.h` | Titan battery / batteries | INDEVOLT RPC, port 8080 |
 
@@ -20,16 +20,17 @@ Tous les appareils de la gamme ne sont **pas accessibles de la même façon** : 
 |---|---|---|---|---|
 | **iP-1000-W2** (1000 W, 2 MPPT) | ❌ **Aucun** (8080, 8899, 502, 80… fermés ; pas d'UDP Solarman) | ✅ API Izypower (~3 min) | `IzypowerCloud.h` | Module WiFi WE-P2 = Deye, mais **100 % cloud** |
 | **iP-2000-W4** (2000 W, 4 MPPT) | ❌ **Aucun** (idem) | ✅ API Izypower (~3 min) | `IzypowerCloud.h` | Idem |
+| **iP-SmartIA-W3** (Smart Meter / Passerelle IA) | ❌ **Aucun** (cloud uniquement) | ✅ API Izypower (~3 min) | `IzypowerCloud.h` | **Testé et fonctionnel avec la librairie** : import/injection réseau, conso foyer, borne EV, tension/fréquence, RSSI (via `device/page` + top-level `grid_power`/`consumption`/`ev_power`) |
 | **Micro-onduleurs Deye SUN\*** avec logger local | ✅ **Solarman V5** (TCP 8899) | — | `IzypowerSolarman.h` | Temps réel si le port 8899 répond |
 | **Titan battery / batteries** | ✅ **INDEVOLT RPC** (TCP 8080) | — | `Izypower.h` | API HTTP locale `Indevolt.GetData` |
 
-**Pourquoi ?** Les micro-onduleurs iP utilisent le module WiFi **Deye WE-P2** qui ne répond à **aucun port TCP** ni à la **découverte UDP Solarman** (48899) : impossible d'y accéder autrement que par le cloud du fabricant. Seuls les onduleurs Deye dotés d'un *Built-in datalogger* (port 8899 ouvert) et les appareils Titan (port 8080) sont lisibles en local.
+**Pourquoi ?** Les appareils iP utilisent le module WiFi **Deye WE-P2** qui ne répond à **aucun port TCP** ni à la **découverte UDP Solarman** (48899) : impossible d'y accéder autrement que par le cloud du fabricant. Seuls les onduleurs Deye dotés d'un *Built-in datalogger* (port 8899 ouvert) et les appareils Titan (port 8080) sont lisibles en local.
 
 **Comment déterminer le bon chemin sur votre installation ?** → exécutez `python3 tools/test_local.py` (voir section [Outils Python](#outils-python)) : il scanne les ports TCP et fait la découverte UDP Solarman pour vous dire quel protocole répond.
 
 ## État de la validation sur matériel
 
-Ce qui a été **réellement testé** sur mes micro-onduleurs iP (un iP-1000-W2 et un iP-2000-W4), et ce qui **reste à valider** par vos soins :
+Ce qui a été **réellement testé** sur mon installation (un iP-1000-W2, un iP-2000-W4 et un Smart Meter iP-SmartIA-W3), et ce qui **reste à valider** par vos soins :
 
 ### ✅ Validé sur matériel
 
@@ -46,6 +47,7 @@ Ce qui a été **réellement testé** sur mes micro-onduleurs iP (un iP-1000-W2 
 | **Rafraîchissement cloud** | Données réactualisées **~3 min** (`lastUpdate` au format `"YYYY-MM-DD HH:MM:SS"`). |
 | **Device page + wifi** | `GET /device/page` → onduleurs **et Smart Meter** (`sn`, `deviceType`, `device` modèle `"VMP2"`/`"VMP4"`/`"Meter"`, `pvNum` 0 pour le Meter, `mac`, `softwareVersion`, `onlineState`, `rssi`, `dataDtos`) ; `GET /v3/device/wifi/{sn}` → rssi/ip/wifi. |
 | **Métrologie Smart Meter** | `v3/powerStations/info` en top-level → `grid_power` (import + / injection −), `consumption`, `ev_power`. Sur matériel : `v_ac=236.3V`, `freq=49.97Hz`, import/export cumulés, rssi −48 dBm via `device/page` (iP-SmartIA-W3). |
+| **`IzypowerCloud.h` sur ESP réel (avec Smart Meter)** | Client **testé et fonctionnel sur matériel** (ESP8266, firmware passerelle) : `/json` → **3 appareils auto-listés** (Smart Meter iP-SmartIA-W3 `"Meter"`, onduleurs `ip-2000-w4` `"VMP4"` et `ip-1000-w2` `"VMP2"`), métrologie réseau/foyer/EV cohérente avec la consommation réelle. L'exemple `basic.ino` compile sur les deux envs (à flasher pour reproduire). |
 
 ### 🟡 Validé hors matériel (simulation / compilation)
 
@@ -54,7 +56,6 @@ Ce qui a été **réellement testé** sur mes micro-onduleurs iP (un iP-1000-W2 
 
 ### ⏳ Reste à valider
 
-- **`IzypowerCloud.h` sur un ESP réel** : le client a été validé sur matériel via un firmware passerelle (ESP8266 : `/json` → 3 appareils auto-listés, Smart Meter iP-SmartIA-W3 236.3 V / 49.97 Hz, onduleurs `ip-2000-w4`/`ip-1000-w2`). L'exemple `basic.ino` lui-même compile mais n'a pas été flashé tel quel.
 - **`IzypowerSolarman.h` sur un onduleur Deye local** : nécessite un appareil avec le port 8899 réellement ouvert (logger *Built-in datalogger* accessible). Impossible à tester sur mes iP.
 - **`Izypower.h` sur un Titan battery** : nécessite un appareil Titan exposant le port 8080. Non testé sur mes iP (8080 fermé).
 
@@ -79,7 +80,7 @@ lib_deps =
 
 ## Utilisation — API cloud (`IzypowerCloud.h`)
 
-Voie principale des iP (aucun accès local). Client HTTP de `application.izypowercloud.fr`, **accès 100 % par getters** (champs privés) :
+Voie principale des iP et du Smart Meter (aucun accès local). Client HTTP de `application.izypowercloud.fr`, **accès 100 % par getters** (champs privés) :
 
 ```cpp
 #include <IzypowerCloud.h>

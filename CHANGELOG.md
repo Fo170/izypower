@@ -6,8 +6,9 @@
 - **Métrologie station** : `v3/powerStations/info` parse les champs top-level `grid_power`, `consumption`, `ev_power` → nouveaux getters `gridImportW()` (import + / injection −), `houseConsumptionW()`, `evChargeW()`.
 - **Refactorisation « getters »** : accès **100 % par getters** (champs privés `_*` remplis via `friend class IzypowerCloud`), plus aucun champ public. Renommages : `powerW→productionW`, `todayKWh/monthKWh/yearKWh/totalKWh→productionKwhToday/Month/Year/Total`, `signal→signalDbm`, `sn→serialNumber()`, `ratedW→ratedPowerW()`, `pv[i].exists/powerW/energyKWh→pv(i)->connected()/powerW()/energyKwh()`.
 - `examples/basic/basic.ino` mis à jour : nouvelle API getters + affichage Smart Meter (réseau/foyer/EV) et appareils `device/page`.
-- README : API getters, métrologie Smart Meter, endpoint `device/page` détaillé.
-- `library.json` / `library.properties` : version 0.4.0.
+- README : API getters, métrologie Smart Meter, endpoint `device/page` détaillé, **Smart Meter iP-SmartIA-W3 présenté comme testé et fonctionnel** (tableau « accès », validation matériel, intro).
+- `keywords.txt` : remplacé par la nouvelle API (getters `production*`, `gridImportW`, `houseConsumptionW`, `evChargeW`, `signalDbm`, structures `IzypowerCloudDto`/`IzypowerCloudDevice`, constantes `DM_*`).
+- `library.json` / `library.properties` : version 0.4.0 + descriptions/keywords ajoutant l'iP-SmartIA-W3.
 
 ## [0.3.0] — 2026-08-06
 
