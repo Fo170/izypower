@@ -49,7 +49,7 @@
 
 
 // Version de la librairie (source UNIQUE — agrégée par liste_lib.h)
-#define __IZYPOWERCLOUD_H_VERSION__ "0.4.0"
+#define __IZYPOWERCLOUD_H_VERSION__ "0.4.1"
 #include <Arduino.h>
 #ifdef ESP32
   #include <WiFi.h>

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.1] - 2026-10-17
+
+### ✨ Added — macro de version `__<LIB>_H_VERSION__`
+
+Chaque header déclare désormais sa version via une macro préprocesseur,
+source **unique** (un projet hôte peut l'agréger, ex. page `/version`).
+
+### 🏷️ Divers
+
+- Version `0.4.0` → `0.4.1` (`library.json` + `library.properties`)
+
+---
+
 ## [0.4.0] — 2026-08-07
 
 - **Support du Smart Meter iP-SmartIA-W3** dans `src/IzypowerCloud.h` : nouvel endpoint `fetchDevices()` (`GET /device/page`, best-effort/non fatal dans `poll()`) avec les structures `IzypowerCloudDevice` (`serialNumber/type/model/pvNum/macAddress/firmware/deviceId/online/rssiDbm`) et `IzypowerCloudDto` (`key/value`, `dtoValue(key)`). Le Smart Meter (`model: "Meter"`, `pvNum: 0`) n'apparaît que dans `device/page`, pas dans `component/`.
