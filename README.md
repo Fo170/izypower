@@ -4,6 +4,13 @@ Monitoring des **appareils IZYPOWER** (Materfrance) : **micro-onduleurs iP-1000-
 
 ⚠️ **Accès aux données (vérifié sur matériel avec `tools/test_local.py`)** : ces appareils (micro-onduleurs iP et Smart Meter iP-SmartIA-W3) sont des **Deye** (module WiFi WE-P2) mais **n'exposent NI l'API INDEVOLT RPC (8080) NI SOLARMAN V5 (8899)** en local : aucun port TCP ouvert, aucune réponse UDP Solarman. Ils sont **100 % orientés cloud**. La lecture passe donc par l'**API cloud Izypower** (`application.izypowercloud.fr`) : login → token `x-tts-access-token`, données rafraîchies **toutes les ~3 min** (pas de temps réel).
 
+Deux niveaux de lecture sont disponibles par cette API :
+
+| Niveau | Ce que l'on obtient | Méthodes |
+|---|---|---|
+| **État** (instantané + totaux) | puissance, énergies jour/mois/an/total, chaînes PV, métrologie Smart Meter, appareils | `poll()` + getters |
+| **Historique** (courbes) | séries horodatées production / consommation / réseau / PV, par jour, mois, année ou tout l'historique, et **valeur interpolée à un instant quelconque** | `fetchStationHistory()`, `fetchPvHistory()`, `fetchDeviceHistory()`, `historyValueAt()` |
+
 Trois clients header-only sont fournis, selon le matériel :
 
 | Client | Matériel | Protocole |
@@ -48,11 +55,15 @@ Ce qui a été **réellement testé** sur mon installation (un iP-1000-W2, un iP
 | **Device page + wifi** | `GET /device/page` → onduleurs **et Smart Meter** (`sn`, `deviceType`, `device` modèle `"VMP2"`/`"VMP4"`/`"Meter"`, `pvNum` 0 pour le Meter, `mac`, `softwareVersion`, `onlineState`, `rssi`, `dataDtos`) ; `GET /v3/device/wifi/{sn}` → rssi/ip/wifi. |
 | **Métrologie Smart Meter** | `v3/powerStations/info` en top-level → `grid_power` (import + / injection −), `consumption`, `ev_power`. Sur matériel : `v_ac=236.3V`, `freq=49.97Hz`, import/export cumulés, rssi −48 dBm via `device/page` (iP-SmartIA-W3). |
 | **`IzypowerCloud.h` sur ESP réel (avec Smart Meter)** | Client **testé et fonctionnel sur matériel** (ESP8266, firmware passerelle) : `/json` → **3 appareils auto-listés** (Smart Meter iP-SmartIA-W3 `"Meter"`, onduleurs `ip-2000-w4` `"VMP4"` et `ip-1000-w2` `"VMP2"`), métrologie réseau/foyer/EV cohérente avec la consommation réelle. L'exemple `basic.ino` compile sur les deux envs (à flasher pour reproduire). |
+| **Historique `report/*`** (relevés réels du 04/11/2026) | `fetchStationHistory(day)` → 443 à 480 points/jour (`production`/`consumption`/`grid` en W), `month`/`year`/`all` en kWh ; `fetchPvHistory(day)` → **8 séries** `pvN_volt`/`pvN_curr` (207 points) ; `fetchDeviceHistory(meter, "v_ac,a_ac")` → 2 séries. `searchTime` **obligatoire** et **formaté selon la granularité** (`code 500` sinon). |
+| **Fuseaux** | les points d'historique sont en **heure locale du site** (dernier point `22:54` pour `22:56 CET` réels) ; `lastUpdate` est en **heure serveur UTC+8** (`2026-11-05 05:32` à 22:36 CET) → ne pas en déduire la date de recherche. |
+| **Interpolation linéaire** (`valueAt`) | Valeurs recalculées à 08:00 / 12:00 / 14:30 / 21:15 sur une journée réelle (13,00 / 858,90 / 375,90 / 2,60 W) ; le milieu d'un segment redonne exactement la moyenne des deux points. |
 
 ### 🟡 Validé hors matériel (simulation / compilation)
 
 - **Wire-format Solarman V5** : validé par `tools/validate_solarman.py` (portage exact du header, décodage 32 bits, signé, température, double-CRC DEYE → « TOUS LES TESTS PASSENT »). **Non testé sur un onduleur Deye réel** car le port 8899 est fermé sur mes iP.
-- **Compilation** : les 3 headers + l'exemple `basic.ino` compilent sur ESP32 (`esp32dev`) et ESP8266 (`nodemcuv2`).
+- **Décodage de l'historique** : `tools/validate_history.py` (dates, granularités partielles, deux formes de réponse, décimation, interpolation et ses cas limites → « TOUS LES TESTS PASSENT »).
+- **Compilation** : les 3 headers + les exemples `basic.ino` et `history.ino` compilent sur ESP32 (`esp32dev`) et ESP8266 (`nodemcuv2`).
 
 ### ⏳ Reste à valider
 
@@ -64,7 +75,7 @@ Ce qui a été **réellement testé** sur mon installation (un iP-1000-W2, un iP
 ## Caractéristiques
 
 - **Header-only**, sans `.cpp`, compatible **ESP8266** et **ESP32** :
-  - `src/IzypowerCloud.h` — client **API cloud Izypower** : login, auto-découverte de la centrale, station (puissance W + énergies jour/mois/an/total + signal + dernier rafraîchissement), onduleurs et **chaînes PV individuelles** (PV1..PV4 en W + kWh du jour), + **métrologie Smart Meter iP-SmartIA-W3** (import/injection réseau, conso foyer, borne EV, tension/fréquence via `device/page`). Dépend d'ArduinoJson. **Accès 100 % par getters.**
+  - `src/IzypowerCloud.h` — client **API cloud Izypower** : login, auto-découverte de la centrale, station (puissance W + énergies jour/mois/an/total + signal + dernier rafraîchissement), onduleurs et **chaînes PV individuelles** (PV1..PV4 en W + kWh du jour), + **métrologie Smart Meter iP-SmartIA-W3** (import/injection réseau, conso foyer, borne EV, tension/fréquence via `device/page`), + **historique** (courbes `report/*` : séries production/consommation/réseau/PV par jour, mois, année ou tout l'historique, décimation configurable, **interpolation linéaire** pour une valeur à un instant donné). Dépend d'ArduinoJson. **Accès 100 % par getters.**
   - `src/IzypowerSolarman.h` — client **Solarman V5** (TCP 8899) + décodeur `DeyeMicro` (registres Deye micro-onduleur, protocole officiel V118). Pas de dépendance externe.
   - `src/Izypower.h` — client **INDEVOLT RPC** (port 8080) : Titan battery / batteries uniquement.
 
@@ -77,6 +88,126 @@ lib_deps =
     https://github.com/Fo170/izypower.git
     bblanchon/ArduinoJson@^7.0.0
 ```
+
+## Communication avec le cloud Izypower
+
+Cette section décrit **exactement** ce que la librairie envoie et reçoit. Tout
+est vérifié sur matériel (compte réel, station `Fo170`) — pas d'extrapolation
+depuis la documentation.
+
+### Transport
+
+| Élément | Valeur |
+|---|---|
+| Base | `http://application.izypowercloud.fr/photo_voltaic/api` |
+| Schéma | **HTTP simple, port 80** — pas de TLS (choix assumé pour tenir sur un ESP8266 sans accélération cryptographique) |
+| Client | `HTTPClient::begin(WiFiClient&, url)` avec un `WiFiClient` membre (forme obligatoire sur ESP8266) |
+| Timeout | 10 s (`_httpTimeoutMs`) |
+| Encodage | JSON UTF-8 |
+
+### En-têtes envoyés
+
+| En-tête | Valeur | Quand |
+|---|---|---|
+| `app-platform` | `izy` | **toutes** les requêtes (le cloud refuse sans) |
+| `x-tts-access-token` | JWT renvoyé par `/login` | toutes les requêtes authentifiées |
+| `Accept-Language` | `fr-FR,fr;q=0.9` | toutes |
+| `Content-Type` | `application/json` | `POST /login` uniquement |
+
+### Enveloppe de réponse
+
+```json
+{ "code": 200, "msg": "…", "data": { … } }
+```
+
+C'est **`code` dans le corps** qui décide, pas le statut HTTP. Valeurs
+rencontrées :
+
+| `code` | Sens | Comportement de la librairie |
+|---|---|---|
+| `200` | succès | `data` est exploité |
+| `401` | jeton invalide/expiré | re-login automatique puis **un** nouvel essai |
+| `500` | erreur applicative, `msg` explicite | remonté en `IZY_ERR_HTTP` |
+
+Deux `msg` de `code 500` observés et neutralisés en amont :
+
+- `Erreur de format de date` → `searchTime` trop précis pour la granularité ;
+- `veuillez vous connecter` → jeton absent sur un endpoint `report/*`.
+
+### Session
+
+```
+POST /login   {"username": "<email>", "password": "<mot de passe>"}
+              → data.token
+```
+
+Le jeton est conservé en mémoire (jamais sur disque), renvoyé dans
+`x-tts-access-token`, et renouvelé automatiquement :
+
+- après **22 h** d'ancienneté (`_loginAtMs`) ;
+- sur `401`/`403` (un nouvel essai, pas de boucle) ;
+- avant tout appel `report/*` via `_ensureLogin()`.
+
+### Fraîcheur et débit
+
+| | Valeur |
+|---|---|
+| Rafraîchissement des données côté cloud | **~3 min** (observé sur `lastUpdate`) |
+| Fréquence d'appel recommandée | 30 à 60 s pour `poll()` |
+| Historique | à recharger seulement quand l'écran/l'usage le demande |
+| Limite de débit | non documentée ; l'app mobile ne dépasse pas un appel par écran |
+
+### Fuseau horaire — point critique
+
+L'API mélange **deux fuseaux**. Vérifié en comparant à l'heure NTP réelle :
+
+| Donnée | Fuseau | Preuve |
+|---|---|---|
+| `time` des points d'historique, `searchTime` | **heure locale du site** (Europe/Paris) | dernier point `22:54` pour `22:56 CET` réels ; production de 07:12 à la tombée du jour |
+| `lastUpdate` (`v3/powerStations/info`) | **heure serveur, UTC+8** | à `22:36 CET`, le cloud annonçait `2026-11-05 05:32` |
+
+Conséquences :
+
+| Point | Détail |
+|---|---|
+| `epoch()` | heure locale du site « comme si » c'était UTC |
+| `epochUtc(offset)` | heure UTC réelle ; `offset` = décalage local (1 h en hiver, 2 h en été — `IZY_LOCAL_UTC_OFFSET_HOURS`) |
+| Date par défaut de `searchTime` | **jour local**, lu sur l'horloge système (`localtime_r`) |
+| `lastUpdate` | **ne sert pas** à dériver la date : il donnerait le jour du serveur, décalé d'un jour en soirée |
+| Sans horloge synchronisée | repli sur la date de `lastUpdate`, potentiellement décalée d'un jour |
+
+C'est ce qui explique la « courbe du jour vide » observée auparavant : la
+librairie demandait `2026-11-05` (jour du serveur) au lieu de `2026-11-04`
+(jour local). Corrigé : la journée locale se charge désormais correctement.
+
+### Les huit endpoints utilisés
+
+| Méthode | Endpoint | Paramètres | Réponse exploitée |
+|---|---|---|---|
+| `POST` | `/login` | corps `{username, password}` | `data.token` |
+| `GET` | `/powerStations/page` | `page=1&limit=100` | `data.records[].stationsId` |
+| `GET` | `/v3/powerStations/info/{stationsId}` | — | `power`, `data.{todaySum,monthSum,yearSum,allSum,stationName,installedCapacity,lastUpdate,signal,onlineState}` + top-level `grid_power`, `consumption`, `ev_power` |
+| `GET` | `/component/{stationsId}` | `searchTime` | `pvData[]` : `sn`, `pv`, `pvPower`, `energy`, `totalRatePower`, `deviceId` |
+| `GET` | `/device/page` | `powerId`, `deviceType=all`, `page`, `limit` | `data.records[]` : `sn`, `deviceType`, `device`, `pvNum`, `mac`, `softwareVersion`, `deviceId`, `onlineState`, `rssi`, `dataDtos[]` |
+| `GET` | `/report/v2/powerStations/data/{stationsId}` | `timeType`, `dataFlag=energy`, `searchTime`, `showSoc` | `data[]` = séries (voir ci-dessous) |
+| `GET` | `/report/izy/device/data/{deviceSn}` | `timeType`, `queryType=pv`, `searchTime` | `data[]` = séries |
+| `GET` | `/report/device/data/{deviceSn}` | `timeType`, `dataFlag` (CSV), `searchTime` | `data[]` = séries |
+
+### Forme d'une série
+
+```json
+{ "key": "production", "name": "Production", "unit": "W", "lineType": "line",
+  "data": [ { "time": "2026-11-04 14:30:00", "val": 375.9 }, … ] }
+```
+
+| Champ | Remarque |
+|---|---|
+| `data` (racine) | **tableau de séries** directement (pas `data.data`) — les deux formes sont acceptées |
+| `key` | `production`, `consumption`, `grid`, `pvN_volt`, `pvN_curr`, `energy`, ou la valeur du `dataFlag` |
+| `grid` | peut apparaître **deux fois** (Importation / Injection) |
+| `unit` | `W` en `day`, `kWh`/`KWh` en `month`/`year`/`all` |
+| `val` | peut être `null` → converti en 0 ; `value` accepté en repli |
+| `time` | **heure locale du site** ; `"YYYY-MM-DD HH:MM:SS"` en `day`, `"YYYY-MM-DD"` en `month`, `"YYYY-MM"` en `year`, `"YYYY"` en `all` |
 
 ## Utilisation — API cloud (`IzypowerCloud.h`)
 
@@ -140,6 +271,248 @@ void loop() {
     }
 }
 ```
+
+## Utilisation — Historique (courbes)
+
+Les courbes affichées par l'application mobile ne viennent **pas** de
+`v3/powerStations/info` : elles sont servies par les endpoints `report/*`.
+`IzypowerCloud` les récupère avec la même session que `poll()` (login et jeton
+partagés), et les expose par getters.
+
+### Les trois fonctions
+
+| Fonction | Endpoint appelé | Ce qu'elle renvoie |
+|---|---|---|
+| `fetchStationHistory(range, searchTime, showSoc)` | `/report/v2/powerStations/data/{id}` | production, consommation, réseau, (batterie) de la centrale |
+| `fetchPvHistory(deviceSn, range, searchTime)` | `/report/izy/device/data/{sn}?queryType=pv` | chaînes PV d'un onduleur |
+| `fetchDeviceHistory(deviceSn, range, searchTime, dataFlag)` | `/report/device/data/{sn}` | un signal par `dataFlag` (Smart Meter, onduleur…) |
+
+```cpp
+int fetchStationHistory(IzyHistoryRange range = IZY_RANGE_DAY,
+                        const char* searchTime = nullptr,
+                        bool showSoc = true);
+
+int fetchPvHistory(const char* deviceSn,
+                   IzyHistoryRange range = IZY_RANGE_DAY,
+                   const char* searchTime = nullptr);
+
+int fetchDeviceHistory(const char* deviceSn,
+                       IzyHistoryRange range = IZY_RANGE_DAY,
+                       const char* searchTime = nullptr,
+                       const char* dataFlag = "energy");
+```
+
+### Paramètres
+
+| Paramètre | Type | Défaut | Rôle |
+|---|---|---|---|
+| `range` | `IzyHistoryRange` | `IZY_RANGE_DAY` | granularité (voir tableau ci-dessous) |
+| `searchTime` | `const char*` | `nullptr` | date de référence ; `nullptr` → celle de `lastUpdate`, lue automatiquement si `poll()` n'a pas tourné |
+| `showSoc` | `bool` | `true` | ajoute la série batterie quand elle existe |
+| `dataFlag` | `const char*` | `"energy"` | signal demandé ; **liste CSV acceptée** (`"v_ac,a_ac"` → deux séries) |
+| `deviceSn` | `const char*` | — | numéro de série (`55180000F6CF`, `981100005C6C`…) |
+
+### Granularités (`IzyHistoryRange`)
+
+| Constante | `timeType` | `searchTime` réellement envoyé | Contenu observé |
+|---|---|---|---|
+| `IZY_RANGE_DAY` | `day` | `2026-11-04` | 440 à 480 points/jour (~3 min), unité **W** |
+| `IZY_RANGE_MONTH` | `month` | `2026-11` | 1 point par jour, unité **kWh** |
+| `IZY_RANGE_YEAR` | `year` | `2026` | 1 point par mois, unité **kWh** |
+| `IZY_RANGE_ALL` | `all` | date libre (ignorée) | 1 point, cumuls **kWh** |
+
+La troncature est faite par la librairie (`_normalizeDate()`). Envoyer
+`2026-11-04` avec `month` provoque `code 500 — Erreur de format de date`.
+
+### Codes de retour
+
+Identiques à `poll()` (`cloud.lastErrorText()` pour le libellé) :
+
+| Code | Sens dans un appel d'historique |
+|---|---|
+| `IZY_OK` | séries chargées (même si certaines sont **vides**) |
+| `IZY_ERR_LOGIN` | re-login impossible avant l'appel |
+| `IZY_ERR_CONNECT` | cloud injoignable (DNS/TCP) |
+| `IZY_ERR_HTTP` | statut ≠ 200, ou `code` ≠ 200 dans le corps |
+| `IZY_ERR_PARSE` | JSON illisible, ou `data` sans tableau de séries |
+| `IZY_ERR_NO_STATION` | `stationId` introuvable (station) |
+| `IZY_ERR_TOKEN` | jeton refusé malgré le re-login |
+
+### Séries réellement renvoyées
+
+| Appel | Séries |
+|---|---|
+| `fetchStationHistory(day)` | `production`, `consumption`, `grid` (W) |
+| `fetchStationHistory(month/year/all)` | mêmes clés en kWh ; `grid` apparaît **deux fois** (Importation / Injection) |
+| `fetchPvHistory(sn, day)` | `pv1_volt`…`pv4_volt`, `pv1_curr`…`pv4_curr` → **8 séries** |
+| `fetchPvHistory(sn, month/year)` | `energy` (kWh) |
+| `fetchDeviceHistory(meterSn, day, "v_ac,a_ac")` | `v_ac`, `a_ac` (une série par flag) |
+
+### Lire le résultat
+
+```cpp
+cloud.fetchStationHistory(IZY_RANGE_DAY, "2026-11-04");
+
+// accès par index
+for (uint8_t s = 0; s < cloud.historySeriesCount(); s++) {
+    const IzypowerCloudSeries* serie = cloud.historySeries(s);
+    for (uint16_t p = 0; p < serie->pointCount(); p++) {
+        const IzypowerCloudPoint* pt = serie->point(p);
+        Serial.printf("%s %.2f %s @ %lu\n", serie->key(), pt->value(),
+                      serie->unit(), (unsigned long)pt->epoch());
+    }
+}
+
+// accès par clé (nullptr si absente)
+const IzypowerCloudSeries* prod = cloud.findSeries("production");
+```
+
+| Objet | Getter | Renvoie |
+|---|---|---|
+| `IzypowerCloud` | `historySeriesCount()` | nombre de séries conservées |
+| | `historySeries(i)` | `const IzypowerCloudSeries*` ou `nullptr` |
+| | `findSeries("production")` | `const IzypowerCloudSeries*` ou `nullptr` |
+| | `historyRange()` | granularité du dernier appel |
+| | `historySearchTime()` | `searchTime` effectivement utilisé |
+| | `historyUpdatedMs()` | `millis()` du dernier chargement |
+| `IzypowerCloudSeries` | `key()`, `name()`, `unit()`, `lineType()` | chaînes |
+| | `pointCount()` | points **conservés** |
+| | `pointTotal()` | points **reçus** du cloud |
+| | `decimated()` | `true` si `pointTotal > pointCount` |
+| | `point(i)` | `const IzypowerCloudPoint*` ou `nullptr` |
+| | `valueAt(epoch, &couvert)` | valeur interpolée |
+| `IzypowerCloudPoint` | `epoch()` | secondes Unix, **heure du cloud** |
+| | `epochUtc(offset)` | secondes Unix, UTC réel (retire le décalage local, 1 h hiver / 2 h été) |
+| | `value()` | valeur mesurée (`float`) |
+
+### Valeur à un instant quelconque
+
+Le cloud ne sait interroger que des **périodes**. Pour une valeur à un instant
+précis, on charge la période contenante puis on **interpole linéairement** entre
+les deux points encadrants :
+
+```cpp
+cloud.fetchStationHistory(IZY_RANGE_DAY, "2026-11-04");      // 1. charger la journée
+
+uint32_t t = IzypowerCloud::toCloudEpoch("2026-11-04 14:30"); // 2. cibler l'instant
+bool couvert = false;
+float watts = cloud.historyValueAt("production", t, &couvert); // 3. interpoler
+
+// équivalent, sur une série déjà obtenue :
+float w2 = cloud.historySeries(0)->valueAt(t, &couvert);
+```
+
+| Fonction | Rôle |
+|---|---|
+| `IzypowerCloud::toCloudEpoch("YYYY-MM-DD HH:MM[:SS]")` | horodatage (heure du cloud) → epoch ; accepte aussi `"YYYY-MM-DD"`, `"YYYY-MM"`, `"YYYY"` ; `0` si invalide |
+| `IzypowerCloudSeries::valueAt(epoch, bool* couvert = nullptr)` | interpolation linéaire sur la série |
+| `IzypowerCloud::historyValueAt(clé, epoch, bool* couvert = nullptr)` | `findSeries(clé)` + `valueAt()` ; `0` si la clé n'existe pas |
+
+Comportement de `*couvert` :
+
+| Situation | Valeur renvoyée | `*couvert` |
+|---|---|---|
+| instant entre deux points | interpolation linéaire | `true` |
+| instant égal à un point | valeur du point | `true` |
+| instant avant le premier point | valeur du premier point (**pas d'extrapolation**) | `false` |
+| instant après le dernier point | valeur du dernier point | `false` |
+| série vide | `0` | `false` |
+| série à un seul point | sa valeur si l'instant correspond, sinon la valeur | `true`/`false` |
+| segment dégénéré ou `epoch` = 0 | valeur du point suivant | `true` |
+
+**Précision** : elle suit la décimation. Avec `IZY_MAX_POINTS=96` sur une
+journée de 440 points, l'écart entre points conservés est d'environ 15 min ;
+pour un pas de 3 min, compiler avec `-DIZY_MAX_POINTS=288` (ou 480).
+
+Vérification sur données réelles (relevés du 04/11/2026) :
+
+```
+2026-11-04 08:00 : production=13.00   consumption=886.00   grid=873.00
+2026-11-04 12:00 : production=858.90  consumption=2043.90  grid=1185.00
+2026-11-04 14:30 : production=375.90  consumption=4499.90  grid=4124.00
+2026-11-04 21:15 : production=2.60    consumption=951.60   grid=949.00
+controle milieu de segment : OK (moyenne exacte des deux points)
+```
+
+### Lecture en flux (mémoire)
+
+Le corps d'une réponse `day` pèse **75 à 90 Ko** : impossible à loger dans le
+tas d'un ESP32 (≈50 Ko libres sur un firmware chargé), et une telle allocation
+fragmente le tas. Les trois fonctions d'historique lisent donc la réponse **en
+flux**, octet par octet, avec une machine à états minimale :
+
+- aucune copie du corps, aucune désérialisation ArduinoJson pour cette partie ;
+- empreinte ≈ 100 o de pile + le buffer de séries ;
+- décimation appliquée **pendant** la lecture : on remplit `IZY_MAX_POINTS`,
+  puis on divise par deux et on double le pas (adaptatif, quelle que soit la
+  taille de la réponse) ; le dernier point reçu est toujours conservé ;
+- `pointTotal()` reste le nombre réellement reçu du cloud.
+
+Disposition du JSON exploitée (vérifiée) : dans chaque série, `data` précède
+`key`/`unit`/`name`/`lineType` — les points sont accumulés puis étiquetés à
+l'arrivée de la clé, qui clôt la série.
+
+### Mémoire et décimation
+
+Chaque appel **remplace** le buffer de séries (pas d'accumulation).
+
+| Macro | Défaut | Effet | Surcharge |
+|---|---|---|---|
+| `IZY_MAX_SERIES` | `8` | séries conservées (8 = historique PV en `day`) | `-DIZY_MAX_SERIES=4` |
+| `IZY_MAX_POINTS` | `96` | points par série | `-DIZY_MAX_POINTS=288` |
+| `IZY_LOCAL_UTC_OFFSET_HOURS` | `1` | décalage local↔UTC pour `epochUtc()` (1 h hiver, 2 h été) | `-DIZY_LOCAL_UTC_OFFSET_HOURS=2` |
+
+Au-delà de `IZY_MAX_POINTS`, les points sont **décimés à pas régulier**, en
+conservant toujours le premier et le dernier ; `pointTotal()` donne le nombre
+réellement reçu et `decimated()` signale la réduction (ex. 452 reçus → 92
+conservés).
+
+Coût mesuré sur ESP8266 avec `basic.ino` : **+6 776 octets** de RAM
+(43,9 % → 52,2 %), flash quasi inchangé (+48 o).
+
+### Exemple complet
+
+```cpp
+#include <IzypowerCloud.h>
+
+IzypowerCloud cloud;
+
+void setup() {
+    cloud.begin("email@compte.fr", "mot_de_passe", 0);
+    if (cloud.poll() != IZY_OK) return;                 // état courant + date de référence
+
+    // Courbes du jour de la centrale
+    if (cloud.fetchStationHistory(IZY_RANGE_DAY) == IZY_OK) {
+        const IzypowerCloudSeries* p = cloud.findSeries("production");
+        if (p && p->pointCount()) {
+            Serial.printf("production %s : %.2f -> %.2f %s (%u/%u points)\n",
+                          cloud.historySearchTime(),
+                          p->point(0)->value(),
+                          p->point(p->pointCount() - 1)->value(),
+                          p->unit(), p->pointCount(), p->pointTotal());
+        }
+    }
+
+    // Valeur à un instant précis
+    uint32_t t = IzypowerCloud::toCloudEpoch("2026-11-04 14:30");
+    bool ok = false;
+    Serial.printf("a 14:30 : %.1f W\n", cloud.historyValueAt("production", t, &ok));
+}
+
+void loop() {}
+```
+
+### Pièges à connaître
+
+| Piège | Détail |
+|---|---|
+| Courbe du **jour en cours** | peut être **vide** tant que le cloud ne l'a pas matérialisée (constaté à 05 h 10 : `IZY_OK` mais 0 point). Tester `pointCount()` avant d'afficher. |
+| `searchTime` obligatoire | sans lui, `code 500`. La librairie lit `lastUpdate` automatiquement. |
+| Format de date | lié à la granularité ; la librairie tronque, ne pas le faire soi-même avec un format local. |
+| Fuseau | les points sont en heure locale du site, mais `lastUpdate` est en heure serveur (UTC+8) : ne pas en déduire la date. |
+| `grid` en double | Importation et Injection partagent la même clé ; les distinguer par `name()`. |
+| `val` à `null` | converti en `0` (pas d'erreur). |
+| 8 séries en PV `day` | avec `IZY_MAX_SERIES=4`, les 4 séries de courant sont perdues. |
 
 ## Utilisation — Solarman V5 (`IzypowerSolarman.h`)
 
@@ -247,20 +620,47 @@ python3 tools/validate_solarman.py   # → « TOUS LES TESTS PASSENT »
 
 **À relancer à chaque modification du framing/décodage de `IzypowerSolarman.h`** pour s'assurer que le portage reste cohérent.
 
-## API cloud Izypower (résumé des endpoints)
+### `tools/validate_history.py` — valider le décodage des courbes
 
-Base : `http://application.izypowercloud.fr/photo_voltaic/api` — headers `app-platform: izy` + `x-tts-access-token` (token JWT).
+Portage **exact en Python** de la partie « historique » de `IzypowerCloud.h` :
+conversion `time` → epoch (y compris les granularités partielles `"2026"`,
+`"2026-11"`), normalisation de `searchTime` par granularité, sélection de la
+forme de réponse (`data.data[]` station ou `data[]` appareil/PV), lecture
+`val`/`value`, décimation à `IZY_MAX_POINTS`, limites de séries, casdégénérés, et **interpolation linéaire** (`value_at` : bornes exactes, milieu,
+1/10, hors plage, série vide, point unique, passage par zéro, horodatage nul).
+Aucune dépendance, aucun réseau, aucun identifiant :
+
+```bash
+python3 tools/validate_history.py    # → « TOUS LES TESTS PASSENT »
+```
+
+**À relancer à chaque modification de `_fetchHistory()` ou de `valueAt()`.**
+
+## Récapitulatif des endpoints (rappel)
+
+Le détail — en-têtes, enveloppe, codes, fuseau, forme des séries — est dans
+[Communication avec le cloud Izypower](#communication-avec-le-cloud-izypower).
+Les huit endpoints appelés par la librairie :
+
+| # | Endpoint | Fonction qui l'utilise |
+|---|---|---|
+| 1 | `POST /login` | `login()` / `_ensureLogin()` |
+| 2 | `GET /powerStations/page` | `fetchStations()` |
+| 3 | `GET /v3/powerStations/info/{id}` | `fetchStationInfo()` |
+| 4 | `GET /component/{id}` | `fetchComponent()` |
+| 5 | `GET /device/page` | `fetchDevices()` |
+| 6 | `GET /report/v2/powerStations/data/{id}` | `fetchStationHistory()` |
+| 7 | `GET /report/izy/device/data/{sn}` | `fetchPvHistory()` |
+| 8 | `GET /report/device/data/{sn}` | `fetchDeviceHistory()` |
+
+Endpoints **non** implémentés (présents dans l'app mobile, utiles si besoin) :
 
 | Endpoint | Données |
 |---|---|
-| `POST /login` | `data.token` (JWT) |
-| `GET /powerStations/page?page=1&limit=100` | `data.records[].stationsId` (auto-découverte) |
-| `GET /v3/powerStations/info/{id}` | `power` (W), `data.{todaySum,monthSum,yearSum,allSum}` (kWh), `data.{stationName,installedCapacity,lastUpdate,signal,onlineState}` + métrologie Smart Meter en top-level : `grid_power`, `consumption`, `ev_power` |
-| `GET /component/{id}?searchTime=YYYY-MM-DD` | `pvData[]` : `sn`, `pv` (pv1..pv4), `pvPower` (W), `energy` (kWh/jour), `totalRatePower` (W), `deviceId` |
-| `GET /v3/device/wifi/{sn}` | `rssi`, `wifi`, `ip` |
-| `GET /device/page?powerId={id}&deviceType=all&page=1&limit=100` | `data.records[]` : `sn`, `deviceType`, `device` (modèle `"VMP2"`/`"VMP4"`/`"Meter"`), `pvNum` (0 = Smart Meter), `mac`, `softwareVersion`, `deviceId`, `onlineState`, `rssi`, `dataDtos[]` (paires `key`/`value`) |
-
-`searchTime` est optionnel (données du jour) mais sans lui `energy` vaut `null` : `IzypowerCloud` extrait donc la date de `data.lastUpdate` de la station.
+| `GET /v3/device/wifi/{sn}` | `rssi`, `wifi`, `ip` de l'appareil |
+| `GET /report/device/rssi/data/{sn}` | historique du signal WiFi |
+| `GET /v2/device/dataFlags/{deviceId}` | signaux disponibles pour un appareil (à utiliser pour choisir `dataFlag`) |
+| `GET /v2/device/realInfo/{deviceId}` | instantané complet d'un appareil |
 
 ## Registres micro-onduleur (Deye, Solarman V5, holding fc 0x03, 0-based)
 

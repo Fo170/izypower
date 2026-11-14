@@ -1,8 +1,8 @@
 {
   "name": "Izypower",
-  "version": "0.4.1",
-  "description": "Client pour appareils IZYPOWER iP-1000-W2 / iP-2000-W4 / iP-SmartIA-W3 : API cloud Izypower (application.izypowercloud.fr) — les iP n'exposent ni Solarman V5 ni INDEVOLT en local, Smart Meter iP-SmartIA-W3 lu via device/page — + client INDEVOLT RPC (8080) pour Titan/batteries + client Solarman V5 (TCP 8899) pour onduleurs Deye locaux. ESP8266/ESP32",
-  "keywords": ["izypower", "deye", "solarman", "modbus", "cloud", "izypowercloud", "micro-onduleur", "inverter", "smart", "meter", "smartmeter", "solar", "pv", "esp8266", "esp32"],
+  "version": "0.5.0",
+  "description": "Client pour appareils IZYPOWER iP-1000-W2 / iP-2000-W4 / iP-SmartIA-W3 : API cloud Izypower (application.izypowercloud.fr) — état temps réel, chaînes PV, métrologie Smart Meter et HISTORIQUE (courbes report/* par jour, mois, année ou tout l'historique) — les iP n'exposent ni Solarman V5 ni INDEVOLT en local — + client INDEVOLT RPC (8080) pour Titan/batteries + client Solarman V5 (TCP 8899) pour onduleurs Deye locaux. ESP8266/ESP32",
+  "keywords": ["izypower", "deye", "solarman", "modbus", "cloud", "izypowercloud", "micro-onduleur", "inverter", "smart", "meter", "smartmeter", "solar", "pv", "esp8266", "esp32", "history", "report", "chart", "courbe", "historique"],
   "repository": {
     "type": "git",
     "url": "https://github.com/Fo170/izypower.git"
@@ -27,6 +27,11 @@
       "name": "Basic",
       "base": "examples/basic",
       "files": ["basic.ino"]
+    },
+    {
+      "name": "History",
+      "base": "examples/history",
+      "files": ["history.ino"]
     }
   ],
   "dependencies": {
